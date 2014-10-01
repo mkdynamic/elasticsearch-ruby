@@ -26,31 +26,40 @@ Gem::Specification.new do |s|
   if defined?(RUBY_VERSION) && RUBY_VERSION < '1.9'
     s.add_dependency "system_timer"
   end
+
   s.add_development_dependency "bundler", "> 1"
   s.add_development_dependency "rake"
+
+  if defined?(RUBY_VERSION) && RUBY_VERSION > '1.9'
+    s.add_development_dependency "elasticsearch-extensions"
+  end
 
   s.add_development_dependency "ansi"
   s.add_development_dependency "shoulda-context"
   s.add_development_dependency "mocha"
   s.add_development_dependency "turn"
   s.add_development_dependency "yard"
-  s.add_development_dependency "ruby-prof"
   s.add_development_dependency "pry"
+  s.add_development_dependency "ci_reporter", "~> 1.9"
 
   # Gems for testing integrations
-  s.add_development_dependency "curb"
-  s.add_development_dependency "typhoeus"
+  s.add_development_dependency "curb"   unless defined? JRUBY_VERSION
+  s.add_development_dependency "patron" unless defined? JRUBY_VERSION
+  s.add_development_dependency "typhoeus", '~> 0.6'
 
   # Prevent unit test failures on Ruby 1.8
   if defined?(RUBY_VERSION) && RUBY_VERSION < '1.9'
     s.add_development_dependency "test-unit", '~> 2'
+    s.add_development_dependency "json"
   end
 
   if defined?(RUBY_VERSION) && RUBY_VERSION > '1.9'
+    s.add_development_dependency "minitest", "~> 4.0"
+    s.add_development_dependency "ruby-prof"    unless defined?(JRUBY_VERSION) || defined?(Rubinius)
+    s.add_development_dependency "require-prof" unless defined?(JRUBY_VERSION) || defined?(Rubinius)
     s.add_development_dependency "simplecov"
+    s.add_development_dependency "simplecov-rcov"
     s.add_development_dependency "cane"
-    s.add_development_dependency "require-prof"
-    s.add_development_dependency "coveralls"
   end
 
   s.description = <<-DESC.gsub(/^    /, '')

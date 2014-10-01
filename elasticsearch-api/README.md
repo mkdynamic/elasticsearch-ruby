@@ -14,6 +14,13 @@ library.
 
 The library is compatible with Ruby 1.8.7 or higher.
 
+The library is compatible with Elasticsearch 0.90 and 1.0 -- you have to install and use a matching version, though.
+
+The 1.x versions and the master branch are compatible with **Elasticsearch 1.x** API.
+
+To use the **Elasticsearch 0.90** API, install the **0.4.x** gem version or use the corresponding
+[`0.4`](https://github.com/elasticsearch/elasticsearch-ruby/tree/0.4) branch.
+
 ## Installation
 
 Install the package from [Rubygems](https://rubygems.org):
@@ -36,6 +43,8 @@ or install it from a source code checkout:
 The library is designed as a group of standalone Ruby modules, which can be mixed into a class
 providing connection to Elasticsearch -- an Elasticsearch client.
 
+### Usage with the `elasticsearch` gem
+
 **When you use the client from the [`elasticsearch-ruby`](https://github.com/elasticsearch/elasticsearch-ruby/) package,
 the library modules have been already included**, so you just call the API methods:
 
@@ -45,13 +54,18 @@ require 'elasticsearch'
 client = Elasticsearch::Client.new log: true
 
 client.index  index: 'myindex', type: 'mytype', id: 1, body: { title: 'Test' }
-# => {"ok"=>true, "_index"=>"myindex", ...}
+# => {"_index"=>"myindex", ... "created"=>true}
 
-client.search body: { query: { match: { title: 'test' } } }
+client.search index: 'myindex', body: { query: { match: { title: 'test' } } }
 # => {"took"=>2, ..., "hits"=>{"total":5, ...}}
 ```
 
-When you want to mix the library into you own client, it must conform to a following _contract_:
+Full documentation and examples are included as RDoc annotations in the source code
+and available online at <http://rubydoc.info/gems/elasticsearch-api>.
+
+### Usage with a custom client
+
+When you want to mix the library into your own client, it must conform to a following _contract_:
 
 * It responds to a `perform_request(method, path, params, body)` method,
 * the method returns an object with `status`, `body` and `headers` methods.
@@ -90,7 +104,7 @@ p client.index index: 'myindex', type: 'mytype', id: 'custom', body: { title: "I
 # => "{"ok":true, ... }"
 ```
 
-## Using JSON Builders
+### Using JSON Builders
 
 Instead of passing the `:body` argument as a Ruby _Hash_, you can pass it as a _String_, potentially
 taking advantage of JSON builders such as [JBuilder](https://github.com/rails/jbuilder) or
@@ -99,7 +113,7 @@ taking advantage of JSON builders such as [JBuilder](https://github.com/rails/jb
 ```ruby
 require 'jbuilder'
 
-json = Jbuilder.encode do |json|
+query = Jbuilder.encode do |json|
   json.query do
     json.match do
       json.title do
@@ -110,7 +124,7 @@ json = Jbuilder.encode do |json|
   end
 end
 
-client.search index: 'myindex', body: json
+client.search index: 'myindex', body: query
 
 # 2013-06-25 09:56:05 +0200: GET http://localhost:9200/myindex/_search [status:200, request:0.015s, query:0.011s]
 # 2013-06-25 09:56:05 +0200: > {"query":{"match":{"title":{"query":"test 1","operator":"and"}}}}
@@ -118,7 +132,7 @@ client.search index: 'myindex', body: json
 # => {"took"=>21, ..., "hits"=>{"total"=>1, "hits"=>[{ "_source"=>{"title"=>"Test 1", ...}}]}}
 ```
 
-## Using Hash Wrappers
+### Using Hash Wrappers
 
 For a more comfortable access to response properties, you may wrap it in one of the _Hash_ "object access"
 wrappers, such as [`Hashie::Mash`](https://github.com/intridea/hashie):
@@ -137,7 +151,7 @@ mash = Hashie::Mash.new response
 mash.hits.hits.first._source.title
 # => 'Test'
 
-response.facets.tags.terms.first
+mash.facets.tags.terms.first
 # => #<Hashie::Mash count=3 term="z">
 ```
 

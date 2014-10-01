@@ -7,12 +7,6 @@ module Elasticsearch
       context "Indices: Put warmer" do
         subject { FakeClient.new }
 
-        should "require the :index argument" do
-          assert_raise ArgumentError do
-            subject.indices.put_warmer :name => 'foo', :body => {}
-          end
-        end
-
         should "require the :name argument" do
           assert_raise ArgumentError do
             subject.indices.put_warmer :index => 'foo', :body => {}
@@ -53,6 +47,15 @@ module Elasticsearch
           end.returns(FakeResponse.new)
 
           subject.indices.put_warmer :index => 'foo', :type => 'bar', :name => 'xul', :body => {}
+        end
+
+        should "URL-escape the parts" do
+          subject.expects(:perform_request).with do |method, url, params, body|
+            assert_equal 'foo%5Ebar/bar%2Fbam/_warmer/qu+uz', url
+            true
+          end.returns(FakeResponse.new)
+
+          subject.indices.put_warmer :index => 'foo^bar', :type => 'bar/bam', :name => 'qu uz', :body => {}
         end
 
       end

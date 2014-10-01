@@ -20,16 +20,20 @@ module Elasticsearch
               connection.connection.url = url
 
               case method
-                when 'HEAD', 'GET' then connection.connection.http method.downcase.to_sym
-                when 'PUT'         then connection.connection.http_put serializer.dump(body)
-                when 'DELETE'      then connection.connection.http_delete
-                when 'POST'
-                  connection.connection.post_body = __convert_to_json(body) if body
-                  connection.connection.http_post
+                when 'HEAD'
+                when 'GET', 'POST', 'PUT', 'DELETE'
+                  connection.connection.put_data = __convert_to_json(body) if body
                 else raise ArgumentError, "Unsupported HTTP method: #{method}"
               end
 
-              Response.new connection.connection.response_code, connection.connection.body_str
+              connection.connection.http(method.to_sym)
+
+              headers = {}
+              headers['content-type'] = 'application/json' if connection.connection.header_str =~ /\/json/
+
+              Response.new connection.connection.response_code,
+                           connection.connection.body_str,
+                           headers
             end
           end
 
@@ -40,13 +44,19 @@ module Elasticsearch
           def __build_connections
             Connections::Collection.new \
               :connections => hosts.map { |host|
-                host[:protocol] ||= DEFAULT_PROTOCOL
+                host[:protocol]   = host[:scheme] || DEFAULT_PROTOCOL
                 host[:port]     ||= DEFAULT_PORT
 
                 client = ::Curl::Easy.new
                 client.resolve_mode = :ipv4
-                client.headers      = {'Content-Type' => 'application/json'}
-                client.url          = "#{host[:protocol]}://#{host[:host]}:#{host[:port]}"
+                client.headers      = {'User-Agent' => "Curb #{Curl::CURB_VERSION}"}
+                client.url          = __full_url(host)
+
+                if host[:user]
+                  client.http_auth_types = host[:auth_type] || :basic
+                  client.username = host[:user]
+                  client.password = host[:password]
+                end
 
                 client.instance_eval &@block if @block
 
@@ -60,7 +70,7 @@ module Elasticsearch
           # @return [Array]
           #
           def host_unreachable_exceptions
-            [::Curl::Err::HostResolutionError, ::Curl::Err::ConnectionFailedError]
+            [::Curl::Err::HostResolutionError, ::Curl::Err::ConnectionFailedError, ::Curl::Err::GotNothingError, ::Curl::Err::RecvError, ::Curl::Err::SendError]
           end
         end
 

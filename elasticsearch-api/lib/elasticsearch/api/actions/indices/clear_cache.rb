@@ -23,6 +23,11 @@ module Elasticsearch
         #     client.indices.clear_cache field_data: true, fields: 'created_at', filter_cache: false, id_cache: false
         #
         # @option arguments [List] :index A comma-separated list of index name to limit the operation
+        # @option arguments [Boolean] :allow_no_indices Whether to ignore if a wildcard indices expression resolves into
+        #                                               no concrete indices. (This includes `_all` string or when no
+        #                                               indices have been specified)
+        # @option arguments [String] :expand_wildcards Whether to expand wildcard expression to concrete indices that
+        #                                              are open, closed or both. (options: open, closed)
         # @option arguments [Boolean] :field_data Clear field data
         # @option arguments [Boolean] :fielddata Clear field data
         # @option arguments [List] :fields A comma-separated list of fields to clear when using the
@@ -33,30 +38,35 @@ module Elasticsearch
         #                                          `filter_cache` parameter (default: all)
         # @option arguments [Boolean] :id Clear ID caches for parent/child
         # @option arguments [Boolean] :id_cache Clear ID caches for parent/child
-        # @option arguments [String] :ignore_indices When performed on multiple indices,
-        #                                            allows to ignore `missing` ones (options: none, missing)
+        # @option arguments [String] :ignore_indices When performed on multiple indices, allows to ignore
+        #                                            `missing` ones (options: none, missing) @until 1.0
+        # @option arguments [Boolean] :ignore_unavailable Whether specified concrete indices should be ignored when
+        #                                                 unavailable (missing, closed, etc)
         # @option arguments [List] :index A comma-separated list of index name to limit the operation
         # @option arguments [Boolean] :recycler Clear the recycler cache
         #
         # @see http://www.elasticsearch.org/guide/reference/api/admin-indices-clearcache/
         #
         def clear_cache(arguments={})
+          valid_params = [
+            :field_data,
+            :fielddata,
+            :fields,
+            :filter,
+            :filter_cache,
+            :filter_keys,
+            :id,
+            :id_cache,
+            :ignore_indices,
+            :ignore_unavailable,
+            :allow_no_indices,
+            :expand_wildcards,
+            :recycler ]
+
           method = 'POST'
-          path   = Utils.__pathify( Utils.__listify(arguments[:index]), '_cache/clear' )
-          params = arguments.select do |k,v|
-            [ :field_data,
-              :fielddata,
-              :fields,
-              :filter,
-              :filter_cache,
-              :filter_keys,
-              :id,
-              :id_cache,
-              :ignore_indices,
-              :recycler ].include?(k)
-          end
-          # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-          params = Hash[params] unless params.is_a?(Hash)
+          path   = Utils.__pathify Utils.__listify(arguments[:index]), '_cache/clear'
+
+          params = Utils.__validate_and_extract_params arguments, valid_params
           body   = nil
 
           params[:fields] = Utils.__listify(params[:fields]) if params[:fields]

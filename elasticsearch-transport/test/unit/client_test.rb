@@ -38,6 +38,13 @@ class Elasticsearch::Transport::ClientTest < Test::Unit::TestCase
       @client.perform_request 'GET', '/'
     end
 
+    should "send GET request as POST with the send_get_body_as option" do
+      transport = DummyTransport.new
+      client = Elasticsearch::Transport::Client.new :transport => transport, :send_get_body_as => 'POST'
+      transport.expects(:perform_request).with 'POST', '/', {}, '{"foo":"bar"}'
+      client.perform_request 'GET', '/', {}, '{"foo":"bar"}'
+    end
+
     should "have default logger for transport" do
       client = Elasticsearch::Transport::Client.new :log => true
       assert_respond_to client.transport.logger, :info
@@ -46,6 +53,14 @@ class Elasticsearch::Transport::ClientTest < Test::Unit::TestCase
     should "have default tracer for transport" do
       client = Elasticsearch::Transport::Client.new :trace => true
       assert_respond_to client.transport.tracer, :info
+    end
+
+    should "initialize the default transport class" do
+      Elasticsearch::Transport::Client::DEFAULT_TRANSPORT_CLASS.any_instance.
+        unstub(:__build_connections)
+
+      client = Elasticsearch::Client.new
+      assert_match /Faraday/, client.transport.connections.first.connection.headers['User-Agent']
     end
 
     context "when passed hosts" do
@@ -62,34 +77,91 @@ class Elasticsearch::Transport::ClientTest < Test::Unit::TestCase
         assert_equal 'foobar', c2.transport.hosts.first[:host]
         assert_equal 'foobar', c3.transport.hosts.first[:host]
       end
+
+    end
+
+    context "when the URL is set in the environment variable" do
+      setup    { ENV['ELASTICSEARCH_URL'] = 'foobar' }
+      teardown { ENV.delete('ELASTICSEARCH_URL')     }
+
+      should "use it" do
+        c = Elasticsearch::Transport::Client.new
+        assert_equal 'foobar', c.transport.hosts.first[:host]
+      end
     end
 
     context "extracting hosts" do
-      should "handle defaults" do
-        assert_equal [ {:host => 'localhost', :port => nil} ], @client.__extract_hosts
-      end
-
       should "extract from string" do
-        assert_equal [ {:host => 'myhost', :port => nil} ], @client.__extract_hosts( 'myhost' )
+        hosts = @client.__extract_hosts 'myhost'
+
+        assert_equal 'myhost', hosts[0][:host]
+        assert_nil             hosts[0][:port]
       end
 
       should "extract from array" do
-        assert_equal [ {:host => 'myhost', :port => nil} ], @client.__extract_hosts( ['myhost'] )
+        hosts = @client.__extract_hosts ['myhost']
+
+        assert_equal 'myhost', hosts[0][:host]
       end
 
       should "extract from array with multiple hosts" do
-        assert_equal [ {:host => 'host1', :port => nil}, {:host => 'host2', :port => nil} ],
-                     @client.__extract_hosts( ['host1', 'host2'] )
+        hosts = @client.__extract_hosts ['host1', 'host2']
+
+        assert_equal 'host1', hosts[0][:host]
+        assert_equal 'host2', hosts[1][:host]
       end
 
       should "extract from array with ports" do
-        assert_equal [ {:host => 'host1', :port => '1000'}, {:host => 'host2', :port => '2000'} ],
-                     @client.__extract_hosts( ['host1:1000', 'host2:2000'] )
+        hosts = @client.__extract_hosts ['host1:1000', 'host2:2000']
+
+        assert_equal 'host1', hosts[0][:host]
+        assert_equal '1000',  hosts[0][:port]
+
+        assert_equal 'host2', hosts[1][:host]
+        assert_equal '2000',  hosts[1][:port]
+      end
+
+      should "extract path" do
+        hosts = @client.__extract_hosts 'https://myhost:8080/api'
+
+        assert_equal '/api',  hosts[0][:path]
+      end
+
+      should "extract scheme (protocol)" do
+        hosts = @client.__extract_hosts 'https://myhost:8080'
+
+        assert_equal 'https',  hosts[0][:scheme]
+        assert_equal 'myhost', hosts[0][:host]
+        assert_equal '8080',   hosts[0][:port]
+      end
+
+      should "extract credentials" do
+        hosts = @client.__extract_hosts 'http://USERNAME:PASSWORD@myhost:8080'
+
+        assert_equal 'http',     hosts[0][:scheme]
+        assert_equal 'USERNAME', hosts[0][:user]
+        assert_equal 'PASSWORD', hosts[0][:password]
+        assert_equal 'myhost',   hosts[0][:host]
+        assert_equal '8080',     hosts[0][:port]
       end
 
       should "pass Hashes over" do
-        assert_equal [ {:host => 'myhost', :port => '1000'} ],
-                     @client.__extract_hosts( [{:host => 'myhost', :port => '1000'}] )
+        hosts = @client.__extract_hosts [{:host => 'myhost', :port => '1000', :foo => 'bar'}]
+
+        assert_equal 'myhost', hosts[0][:host]
+        assert_equal '1000',   hosts[0][:port]
+        assert_equal 'bar',    hosts[0][:foo]
+      end
+
+      should "use URL instance" do
+        require 'uri'
+        hosts = @client.__extract_hosts URI.parse('https://USERNAME:PASSWORD@myhost:4430')
+
+        assert_equal 'https',    hosts[0][:scheme]
+        assert_equal 'USERNAME', hosts[0][:user]
+        assert_equal 'PASSWORD', hosts[0][:password]
+        assert_equal 'myhost',   hosts[0][:host]
+        assert_equal '4430',     hosts[0][:port]
       end
 
       should "raise error for incompatible argument" do
@@ -100,9 +172,43 @@ class Elasticsearch::Transport::ClientTest < Test::Unit::TestCase
 
       should "randomize hosts" do
         hosts = [ {:host => 'host1'}, {:host => 'host2'}, {:host => 'host3'}, {:host => 'host4'}, {:host => 'host5'}]
-        assert_not_equal     hosts, @client.__extract_hosts(hosts, :randomize_hosts => true)
+
+        Array.any_instance.expects(:shuffle!).twice
+
+        @client.__extract_hosts(hosts, :randomize_hosts => true)
         assert_same_elements hosts, @client.__extract_hosts(hosts, :randomize_hosts => true)
       end
+    end
+
+    context "detecting adapter for Faraday" do
+      setup do
+        Elasticsearch::Transport::Client::DEFAULT_TRANSPORT_CLASS.any_instance.unstub(:__build_connections)
+        begin; Object.send(:remove_const, :Typhoeus); rescue NameError; end
+        begin; Object.send(:remove_const, :Patron);   rescue NameError; end
+      end
+
+      should "use the default adapter" do
+        c = Elasticsearch::Transport::Client.new
+        handlers = c.transport.connections.all.first.connection.builder.handlers
+
+        assert_includes handlers, Faraday::Adapter::NetHttp
+      end
+
+      should "use the adapter from arguments" do
+        c = Elasticsearch::Transport::Client.new :adapter => :typhoeus
+        handlers = c.transport.connections.all.first.connection.builder.handlers
+
+        assert_includes handlers, Faraday::Adapter::Typhoeus
+      end
+
+      should "detect the adapter" do
+        require 'patron'; load 'patron.rb'
+
+        c = Elasticsearch::Transport::Client.new
+        handlers = c.transport.connections.all.first.connection.builder.handlers
+
+        assert_includes handlers, Faraday::Adapter::Patron
+      end unless JRUBY
     end
 
   end

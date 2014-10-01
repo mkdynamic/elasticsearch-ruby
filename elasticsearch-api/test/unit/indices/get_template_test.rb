@@ -7,12 +7,6 @@ module Elasticsearch
       context "Indices: Get template" do
         subject { FakeClient.new }
 
-        should "require the :name argument" do
-          assert_raise ArgumentError do
-            subject.indices.get_template
-          end
-        end
-
         should "perform correct request" do
           subject.expects(:perform_request).with do |method, url, params, body|
             assert_equal 'GET', method
@@ -24,6 +18,16 @@ module Elasticsearch
 
           subject.indices.get_template :name => 'foo'
         end
+
+        should "URL-escape the parts" do
+          subject.expects(:perform_request).with do |method, url, params, body|
+            assert_equal '_template/foo%5Ebar', url
+            true
+          end.returns(FakeResponse.new)
+
+          subject.indices.get_template :name => 'foo^bar'
+        end
+
 
       end
 

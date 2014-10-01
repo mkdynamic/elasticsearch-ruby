@@ -13,7 +13,7 @@ module Elasticsearch
         #
         #     client.indices.analyze text: 'The Quick Brown Jumping Fox', analyzer: 'snowball'
         #
-        # @example Analyze text "Quick Brown Jumping Fox" with the _snowball_ analyzer
+        # @example Analyze text "Quick Brown Jumping Fox" with a custom tokenizer and filter chain
         #
         #     client.indices.analyze text: 'The Quick Brown Jumping Fox',
         #                            tokenizer: 'whitespace',
@@ -36,21 +36,20 @@ module Elasticsearch
         # @see http://www.elasticsearch.org/guide/reference/api/admin-indices-analyze/
         #
         def analyze(arguments={})
-          method = 'GET'
-          path   = Utils.__pathify( arguments[:index], '_analyze' )
-          params = arguments.select do |k,v|
-            [ :analyzer,
-              :field,
-              :filters,
-              :index,
-              :prefer_local,
-              :text,
-              :tokenizer,
-              :format ].include?(k)
-          end
-          # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-          params = Hash[params] unless params.is_a?(Hash)
+          valid_params = [
+            :analyzer,
+            :field,
+            :filters,
+            :index,
+            :prefer_local,
+            :text,
+            :tokenizer,
+            :format ]
 
+          method = 'GET'
+          path   = Utils.__pathify Utils.__listify(arguments[:index]), '_analyze'
+
+          params = Utils.__validate_and_extract_params arguments, valid_params
           params[:filters] = Utils.__listify(params[:filters]) if params[:filters]
 
           body   = arguments[:body]

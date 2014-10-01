@@ -8,7 +8,45 @@ module Elasticsearch
       #
       # @example Search for similar documents using the `title` property of document `myindex/mytype/1`
       #
-      #     client.mlt index: 'myindex', type: 'mytype', id: '1', mlt_fields: 'title'
+      #     # First, let's setup a synonym-aware analyzer ("quick" <=> "fast")
+      #     client.indices.create index: 'myindex', body: {
+      #       settings: {
+      #         analysis: {
+      #           filter: {
+      #             synonyms: {
+      #               type: 'synonym',
+      #               synonyms: [ "quick,fast" ]
+      #             }
+      #           },
+      #           analyzer: {
+      #             title_synonym: {
+      #               type: 'custom',
+      #               tokenizer: 'whitespace',
+      #               filter: ['lowercase', 'stop', 'snowball', 'synonyms']
+      #             }
+      #           }
+      #         }
+      #       },
+      #       mappings: {
+      #         mytype: {
+      #           properties: {
+      #             title: {
+      #               type: 'string',
+      #               analyzer: 'title_synonym'
+      #             }
+      #           }
+      #         }
+      #       }
+      #     }
+      #
+      #     # Index three documents
+      #     client.index index: 'myindex', type: 'mytype', id: 1, body: { title: 'Quick Brown Fox'   }
+      #     client.index index: 'myindex', type: 'mytype', id: 2, body: { title: 'Slow Black Dog'    }
+      #     client.index index: 'myindex', type: 'mytype', id: 3, body: { title: 'Fast White Rabbit' }
+      #     client.indices.refresh index: 'myindex'
+      #
+      #     client.mlt index: 'myindex', type: 'mytype', id: 1, mlt_fields: 'title', min_doc_freq: 1, min_term_freq: 1
+      #     # => { ... {"title"=>"Fast White Rabbit"}}]}}
       #
       # @option arguments [String] :id The document ID (*Required*)
       # @option arguments [String] :index The name of the index (*Required*)
@@ -47,31 +85,35 @@ module Elasticsearch
         raise ArgumentError, "Required argument 'index' missing" unless arguments[:index]
         raise ArgumentError, "Required argument 'type' missing"  unless arguments[:type]
         raise ArgumentError, "Required argument 'id' missing"    unless arguments[:id]
+
+        valid_params = [
+          :boost_terms,
+          :max_doc_freq,
+          :max_query_terms,
+          :max_word_len,
+          :min_doc_freq,
+          :min_term_freq,
+          :min_word_len,
+          :mlt_fields,
+          :percent_terms_to_match,
+          :routing,
+          :search_from,
+          :search_indices,
+          :search_query_hint,
+          :search_scroll,
+          :search_size,
+          :search_source,
+          :search_type,
+          :search_types,
+          :stop_words ]
+
         method = 'GET'
-        path   = Utils.__pathify( arguments[:index], arguments[:type], arguments[:id], '_mlt' )
-        params = arguments.select do |k,v|
-          [ :boost_terms,
-            :max_doc_freq,
-            :max_query_terms,
-            :max_word_len,
-            :min_doc_freq,
-            :min_term_freq,
-            :min_word_len,
-            :mlt_fields,
-            :percent_terms_to_match,
-            :routing,
-            :search_from,
-            :search_indices,
-            :search_query_hint,
-            :search_scroll,
-            :search_size,
-            :search_source,
-            :search_type,
-            :search_types,
-            :stop_words ].include?(k)
-        end
-        # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-        params = Hash[params] unless params.is_a?(Hash)
+        path   = Utils.__pathify Utils.__escape(arguments[:index]),
+                                 Utils.__escape(arguments[:type]),
+                                 Utils.__escape(arguments[:id]),
+                                 '_mlt'
+
+        params = Utils.__validate_and_extract_params arguments, valid_params
 
         [:mlt_fields, :search_indices, :search_types, :stop_words].each do |name|
           params[name] = Utils.__listify(params[name]) if params[name]

@@ -1,3 +1,3 @@
 module Elasticsearch
-  VERSION = "0.4.0"
+  VERSION = "1.0.5"
 end

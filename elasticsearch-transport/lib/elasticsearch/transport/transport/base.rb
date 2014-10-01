@@ -9,11 +9,11 @@ module Elasticsearch
         DEFAULT_PROTOCOL         = 'http'
         DEFAULT_RELOAD_AFTER     = 10_000 # Requests
         DEFAULT_RESURRECT_AFTER  = 60     # Seconds
-        DEFAULT_MAX_TRIES        = 3      # Requests
+        DEFAULT_MAX_RETRIES      = 3      # Requests
         DEFAULT_SERIALIZER_CLASS = Serializer::MultiJson
 
         attr_reader   :hosts, :options, :connections, :counter, :last_request_at, :protocol
-        attr_accessor :serializer, :sniffer, :logger, :tracer, :reload_after, :resurrect_after, :max_tries
+        attr_accessor :serializer, :sniffer, :logger, :tracer, :reload_after, :resurrect_after, :max_retries
 
         # Creates a new transport object.
         #
@@ -42,7 +42,7 @@ module Elasticsearch
           @last_request_at = Time.now
           @reload_after    = options[:reload_connections].is_a?(Fixnum) ? options[:reload_connections] : DEFAULT_RELOAD_AFTER
           @resurrect_after = options[:resurrect_after] || DEFAULT_RESURRECT_AFTER
-          @max_tries       = options[:retry_on_failure].is_a?(Fixnum)   ? options[:retry_on_failure]   : DEFAULT_MAX_TRIES
+          @max_retries     = options[:retry_on_failure].is_a?(Fixnum)   ? options[:retry_on_failure]   : DEFAULT_MAX_RETRIES
         end
 
         # Returns a connection from the connection pool by delegating to {Connections::Collection#get_connection}.
@@ -139,6 +139,19 @@ module Elasticsearch
           o = o.is_a?(String) ? o : serializer.dump(o, options)
         end
 
+        # Returns a full URL based on information from host
+        #
+        # @param host [Hash] Host configuration passed in from {Client}
+        #
+        # @api private
+        def __full_url(host)
+          url  = "#{host[:protocol]}://"
+          url += "#{host[:user]}:#{host[:password]}@" if host[:user]
+          url += "#{host[:host]}:#{host[:port]}"
+          url += "#{host[:path]}" if host[:path]
+          url
+        end
+
         # Performs a request to Elasticsearch, while handling logging, tracing, marking dead connections,
         # retrying the request and reloading the connections.
         #
@@ -164,7 +177,13 @@ module Elasticsearch
           begin
             tries     += 1
             connection = get_connection or raise Error.new("Cannot get new connection from pool.")
+
+            if connection.connection.respond_to?(:params) && connection.connection.params.respond_to?(:to_hash)
+              params = connection.connection.params.merge(params.to_hash)
+            end
+
             url        = connection.full_url(path, params)
+
             response   = block.call(connection, url)
 
             connection.healthy! if connection.failures > 0
@@ -181,7 +200,7 @@ module Elasticsearch
 
             if @options[:retry_on_failure]
               logger.warn "[#{e.class}] Attempt #{tries} connecting to #{connection.host.inspect}" if logger
-              if tries < max_tries
+              if tries <= max_retries
                 retry
               else
                 logger.fatal "[#{e.class}] Cannot connect to #{connection.host.inspect} after #{tries} tries" if logger
@@ -196,19 +215,22 @@ module Elasticsearch
             raise e
           end
 
-          json     = serializer.load(response.body) if response.body.to_s =~ /^\{/
-          took     = (json['took'] ? sprintf('%.3fs', json['took']/1000.0) : 'n/a') rescue 'n/a' if logger || tracer
           duration = Time.now-start if logger || tracer
+
+          if response.status.to_i >= 300
+            __log    method, path, params, body, url, response, nil, 'N/A', duration if logger
+            __trace  method, path, params, body, url, response, nil, 'N/A', duration if tracer
+            __log_failed response if logger
+            __raise_transport_error response
+          end
+
+          json     = serializer.load(response.body) if response.headers && response.headers["content-type"] =~ /json/
+          took     = (json['took'] ? sprintf('%.3fs', json['took']/1000.0) : 'n/a') rescue 'n/a' if logger || tracer
 
           __log   method, path, params, body, url, response, json, took, duration if logger
           __trace method, path, params, body, url, response, json, took, duration if tracer
 
-          if response.status.to_i >= 300
-            __log_failed response if logger
-            __raise_transport_error response
-          else
-            Response.new response.status, json || response.body, response.headers
-          end
+          Response.new response.status, json || response.body, response.headers
         ensure
           @last_request_at = Time.now
         end

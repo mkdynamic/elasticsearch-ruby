@@ -21,23 +21,21 @@ module Elasticsearch
         #
         # @example Delete all indices
         #
-        #     client.indices.delete
         #     client.indices.delete index: '_all'
         #
         # @option arguments [List] :index A comma-separated list of indices to delete;
-        #                                 use `_all` or leave empty to delete all indices
+        #                                 use `_all` to delete all indices
         # @option arguments [Time] :timeout Explicit operation timeout
         #
         # @see http://www.elasticsearch.org/guide/reference/api/admin-indices-delete-index/
         #
         def delete(arguments={})
+          valid_params = [ :timeout ]
+
           method = 'DELETE'
-          path   = Utils.__pathify( Utils.__listify(arguments[:index]) )
-          params = arguments.select do |k,v|
-            [ :timeout ].include?(k)
-          end
-          # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-          params = Hash[params] unless params.is_a?(Hash)
+          path   = Utils.__pathify Utils.__listify(arguments[:index])
+
+          params = Utils.__validate_and_extract_params arguments, valid_params
           body   = nil
 
           perform_request(method, path, params, body).body

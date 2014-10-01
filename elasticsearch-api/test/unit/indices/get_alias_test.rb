@@ -7,12 +7,6 @@ module Elasticsearch
       context "Indices: Get alias" do
         subject { FakeClient.new }
 
-        should "require the :name argument" do
-          assert_raise ArgumentError do
-            subject.indices.get_alias
-          end
-        end
-
         should "perform correct request" do
           subject.expects(:perform_request).with do |method, url, params, body|
             assert_equal 'GET', method
@@ -32,6 +26,15 @@ module Elasticsearch
           end.returns(FakeResponse.new)
 
           subject.indices.get_alias :index => ['foo','bar'], :name => 'bam'
+        end
+
+        should "URL-escape the parts" do
+          subject.expects(:perform_request).with do |method, url, params, body|
+            assert_equal 'foo%5Ebar/_alias/bar%2Fbam', url
+            true
+          end.returns(FakeResponse.new)
+
+          subject.indices.get_alias :index => 'foo^bar', :name => 'bar/bam'
         end
 
       end

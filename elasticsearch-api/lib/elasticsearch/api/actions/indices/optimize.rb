@@ -18,12 +18,22 @@ module Elasticsearch
         #
         # @option arguments [List] :index A comma-separated list of index names; use `_all`
         #                                 or empty string to perform the operation on all indices
+        # @option arguments [Boolean] :allow_no_indices Whether to ignore if a wildcard indices expression resolves into
+        #                                               no concrete indices. (This includes `_all` string or when no
+        #                                               indices have been specified)
+        # @option arguments [String] :expand_wildcards Whether to expand wildcard expression to concrete indices that
+        #                                              are open, closed or both. (options: open, closed)
         # @option arguments [Boolean] :flush Specify whether the index should be flushed after performing the operation
         #                                    (default: true)
-        # @option arguments [String] :ignore_indices When performed on multiple indices, allows to ignore `missing` ones
-        #                                            (options: none, missing)
+        # @option arguments [Boolean] :force Force a merge operation to run, even when the index has a single segment
+        #                                    (default: true)
+        # @option arguments [String] :ignore_indices When performed on multiple indices, allows to ignore
+        #                                            `missing` ones (options: none, missing) @until 1.0
+        # @option arguments [Boolean] :ignore_unavailable Whether specified concrete indices should be ignored when
+        #                                                 unavailable (missing, closed, etc)
         # @option arguments [Number] :max_num_segments The number of segments the index should be merged into
         #                                              (default: dynamic)
+        # @option arguments [Time] :master_timeout Specify timeout for connection to master
         # @option arguments [Boolean] :only_expunge_deletes Specify whether the operation should only expunge
         #                                                   deleted documents
         # @option arguments [Boolean] :refresh Specify whether the index should be refreshed after performing the operation
@@ -34,19 +44,24 @@ module Elasticsearch
         # @see http://www.elasticsearch.org/guide/reference/api/admin-indices-optimize/
         #
         def optimize(arguments={})
+          valid_params = [
+            :ignore_indices,
+            :ignore_unavailable,
+            :allow_no_indices,
+            :expand_wildcards,
+            :flush,
+            :force,
+            :master_timeout,
+            :max_num_segments,
+            :only_expunge_deletes,
+            :operation_threading,
+            :refresh,
+            :wait_for_merge ]
+
           method = 'POST'
-          path   = Utils.__pathify( Utils.__listify(arguments[:index]), '_optimize' )
-          params = arguments.select do |k,v|
-            [ :flush,
-              :ignore_indices,
-              :max_num_segments,
-              :only_expunge_deletes,
-              :operation_threading,
-              :refresh,
-              :wait_for_merge ].include?(k)
-          end
-          # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-          params = Hash[params] unless params.is_a?(Hash)
+          path   = Utils.__pathify Utils.__listify(arguments[:index]), '_optimize'
+
+          params = Utils.__validate_and_extract_params arguments, valid_params
           body = nil
 
           perform_request(method, path, params, body).body

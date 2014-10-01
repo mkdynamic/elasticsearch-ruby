@@ -41,17 +41,17 @@ module Elasticsearch
         should "pass the URL parameters" do
           subject.expects(:perform_request).with do |method, url, params, body|
             assert_equal 'foo/_stats', url
-            assert_equal true, params[:fielddata]
+            assert_equal true, params[:expand_wildcards]
             true
           end.returns(FakeResponse.new)
 
-          subject.indices.stats :index => 'foo', :fielddata => true
+          subject.indices.stats :index => 'foo', :expand_wildcards => true
         end
 
         should "pass the fields parameter as a list" do
           subject.expects(:perform_request).with do |method, url, params, body|
-            assert_equal 'foo/_stats', url
-            assert_equal true, params[:fielddata]
+            assert_equal 'foo/_stats/fielddata', url
+            assert_nil   params[:fielddata]
             assert_equal 'foo,bar', params[:fields]
             true
           end.returns(FakeResponse.new)
@@ -61,7 +61,7 @@ module Elasticsearch
 
         should "pass the groups parameter as a list" do
           subject.expects(:perform_request).with do |method, url, params, body|
-            assert_equal '_stats', url
+            assert_equal '_stats/search', url
             assert_equal 'groupA,groupB', params[:groups]
             true
           end.returns(FakeResponse.new)

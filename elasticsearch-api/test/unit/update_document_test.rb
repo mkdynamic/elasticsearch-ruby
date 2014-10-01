@@ -47,6 +47,21 @@ module Elasticsearch
           subject.update :index => 'foo', :type => 'bar', :id => '1', :version => 100, :body => {}
         end
 
+        should "validate URL parameters" do
+          assert_raise ArgumentError do
+            subject.update :index => 'foo', :type => 'bar', :id => '1', :body => { :doc => {} }, :qwertypoiuy => 'asdflkjhg'
+          end
+        end
+
+        should "URL-escape the parts" do
+          subject.expects(:perform_request).with do |method, url, params, body|
+            assert_equal 'foo%5Ebar/bar%2Fbam/1/_update', url
+            true
+          end.returns(FakeResponse.new)
+
+          subject.update :index => 'foo^bar', :type => 'bar/bam', :id => '1', :body => {}
+        end
+
         should "catch a NotFound exception with the ignore parameter" do
           subject.expects(:perform_request).raises(NotFound)
 

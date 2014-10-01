@@ -1,24 +1,60 @@
+RUBY_1_8 = defined?(RUBY_VERSION) && RUBY_VERSION < '1.9'
+JRUBY    = defined?(JRUBY_VERSION)
+
 require 'pathname'
-require 'active_support/inflector'
+require 'logger'
 require 'yaml'
-require 'pry'
+require 'active_support/inflector'
+require 'ansi'
+require 'turn'
 
 require 'elasticsearch'
-require 'elasticsearch/transport/extensions/test_cluster'
+require 'elasticsearch/extensions/test/cluster'
+require 'elasticsearch/extensions/test/startup_shutdown'
+require 'elasticsearch/extensions/test/profiling' unless JRUBY
+
+# Skip features
+SKIP_FEATURES = ENV['TEST_SKIP_FEATURES'] || ''
+
+# Turn configuration
+ENV['ansi'] = 'false' if ENV['CI']
+Turn.config.format = :pretty
 
 # Launch test cluster
 #
-Elasticsearch::TestCluster.start if ENV['SERVER'] and not Elasticsearch::TestCluster.running?
+Elasticsearch::Extensions::Test::Cluster.start(nodes: 1) if ENV['SERVER'] and not Elasticsearch::Extensions::Test::Cluster.running?
 
 # Register `at_exit` handler for server shutdown.
 # MUST be called before requiring `test/unit`.
 #
-at_exit { Elasticsearch::TestCluster.stop if ENV['SERVER'] }
+at_exit { Elasticsearch::Extensions::Test::Cluster.stop if ENV['SERVER'] }
 
-require 'logger'
-require 'ansi'
+class String
+  # Reset the `ansi` method on CI
+  def ansi(*args)
+    self
+  end
+end if ENV['CI']
 
-logger = Logger.new(STDERR)
+module CapturedLogger
+  def self.included base
+    base.class_eval do
+      %w[ info error warn fatal debug ].each do |m|
+        alias_method "#{m}_without_capture", m
+
+        define_method m do |*args|
+          @logdev.__send__ :puts, *(args.join("\n") + "\n")
+          self.__send__ "#{m}_without_capture", *args
+        end
+      end
+    end
+  end
+end
+
+Logger.__send__ :include, CapturedLogger if ENV['CI']
+
+logger = Logger.new($stderr)
+logger.progname = 'elasticsearch'
 logger.formatter = proc do |severity, datetime, progname, msg|
   color = case severity
     when /INFO/ then :green
@@ -26,13 +62,32 @@ logger.formatter = proc do |severity, datetime, progname, msg|
     when /DEBUG/ then :cyan
     else :white
   end
-  ANSI.ansi(severity[0] + ' ', color, :faint) + ANSI.ansi(msg, :white, :faint) + "\n"
+  "#{severity[0]} ".ansi(color, :faint) + msg.ansi(:white, :faint) + "\n"
 end
 
-$client = Elasticsearch::Client.new host: 'localhost:9250', logger: (ENV['QUIET'] ? nil : logger)
-$es_version = $client.info['version']['number']
+tracer = Logger.new($stdout)
+tracer.progname = 'elasticsearch.tracer'
+tracer.formatter = proc { |severity, datetime, progname, msg| "#{msg}\n" }
 
-puts '-'*80, "Elasticsearch #{ANSI.ansi($es_version, :bold)}", '-'*80
+# Set up the client for the test
+#
+# To set up your own client, just set the `$client` variable in a file, and then require it:
+#
+#     ruby -I lib:test -r ./tmp/my_special_client.rb test/integration/yaml_test_runner.rb
+#
+$client ||= Elasticsearch::Client.new host: "localhost:#{ENV['TEST_CLUSTER_PORT'] || 9250}"
+
+$client.transport.logger = logger unless ENV['QUIET'] || ENV['CI']
+$client.transport.tracer = tracer if ENV['CI']
+
+# Store Elasticsearch version
+#
+es_version_info = $client.info['version']
+$es_version = es_version_info['number']
+
+puts '-'*80,
+     "Elasticsearch #{$es_version.ansi(:bold)} [#{es_version_info['build_hash'].to_s[0...7]}]".center(80),
+     '-'*80
 
 require 'test_helper'
 require 'test/unit'
@@ -44,7 +99,7 @@ module Shoulda
   module Context
     class Context
       def create_test_from_should_hash(should)
-        test_name = ["test:", full_name, "--", "#{should[:name]}. "].flatten.join(' ').to_sym
+        test_name = ["test:", full_name, "|", "#{should[:name]}"].flatten.join(' ').to_sym
 
         if test_methods[test_unit_class][test_name.to_s] then
           raise DuplicateTestError, "'#{test_name}' is defined more than once."
@@ -76,7 +131,7 @@ module Elasticsearch
 
     module Utils
       def titleize(word)
-        word.to_s.gsub(/[^\w]+/, ' ').gsub(/\b('?[a-z])/) { $1.capitalize }
+        word.to_s.gsub(/[^\w]+/, ' ').gsub(/\b('?[a-z])/) { $1.capitalize }.tr('_', ' ')
       end
 
       def symbolize_keys(object)
@@ -121,7 +176,7 @@ module Elasticsearch
           end
         ]
 
-        STDERR.puts "ARGUMENTS: #{arguments.inspect}" if ENV['DEBUG']
+        $stderr.puts "ARGUMENTS: #{arguments.inspect}" if ENV['DEBUG']
 
         $results[test.hash] = namespace.reduce($client) do |memo, current|
           unless current == namespace.last
@@ -163,12 +218,36 @@ module Elasticsearch
 
       def skip?(actions)
         skip = actions.select { |a| a['skip'] }.first
-        if skip
+        $stderr.puts "SKIP: #{skip.inspect}" if ENV['DEBUG']
+
+        # Skip version
+        if skip && skip['skip']['version']
           min, max = skip['skip']['version'].split('-').map(&:strip)
-          if min <= $es_version && max >= $es_version
+
+          min_normalized = sprintf "%03d-%03d-%03d",
+                           *min.split('.')
+                               .map(&:to_i)
+                               .fill(0, min.split('.').length, 3-min.split('.').length)
+
+          max_normalized = sprintf "%03d-%03d-%03d",
+                           *max.split('.')
+                               .map(&:to_i)
+                               .map(&:to_i)
+                               .fill(0, max.split('.').length, 3-max.split('.').length)
+
+          es_normalized  = sprintf "%03d-%03d-%03d", *$es_version.split('.').map(&:to_i)
+
+          if min_normalized <= es_normalized && max_normalized >= es_normalized
             return skip['skip']['reason'] ? skip['skip']['reason'] : true
           end
+
+        # Skip features
+        elsif skip && skip['skip']['features']
+          if (skip['skip']['features'].split(',') & SKIP_FEATURES.split(',') ).size > 0
+            return skip['skip']['features']
+          end
         end
+
         return false
       end
 
@@ -181,7 +260,8 @@ end
 
 include Elasticsearch::YamlTestSuite
 
-PATH    = Pathname(ENV['SPEC'] || File.expand_path('../../../spec/test', __FILE__))
+PATH    = Pathname(ENV['TEST_REST_API_SPEC'] || \
+          File.expand_path('../../../../support/elasticsearch/rest-api-spec/test', __FILE__))
 suites  = Dir.glob(PATH.join('*')).map { |d| Pathname(d) }
 suites  = suites.select { |s| s.to_s =~ Regexp.new(ENV['FILTER']) } if ENV['FILTER']
 
@@ -194,6 +274,7 @@ suites.each do |suite|
     #
     setup do
       $client.indices.delete index: '_all'
+      $client.indices.delete_template name: '*'
       $results = {}
       $stash   = {}
     end
@@ -206,11 +287,16 @@ suites.each do |suite|
 
     files = Dir[suite.join('*.{yml,yaml}')]
     files.each do |file|
-
       tests = YAML.load_documents File.new(file)
 
       # Extract setup actions
       setup_actions = tests.select { |t| t['setup'] }.first['setup'] rescue []
+
+      # Skip all the tests when `skip` is part of the `setup` part
+      if features = Runner.skip?(setup_actions)
+        $stdout.puts "#{'SKIP'.ansi(:yellow)} [#{name}] #{file.gsub(PATH.to_s, '').ansi(:bold)} (Feature not implemented: #{features})"
+        next
+      end
 
       # Remove setup actions from tests
       tests = tests.reject { |t| t['setup'] }
@@ -220,17 +306,18 @@ suites.each do |suite|
 
       tests.each do |test|
         context '' do
-          test_name = test.keys.first
+          test_name = test.keys.first.to_s + (ENV['QUIET'] ? '' : " | #{file.gsub(PATH.to_s, '').ansi(:bold)}")
           actions   = test.values.first
 
           if reason = Runner.skip?(actions)
-            STDOUT.puts "#{ANSI.ansi('SKIP', :yellow)}: [#{name}] #{test_name} (Reason: #{reason})"
+            $stdout.puts "#{'SKIP'.ansi(:yellow)} [#{name}] #{test_name} (Reason: #{reason})"
             next
           end
 
           # --- Register test setup -------------------------------------------
           setup do
             actions.select { |a| a['setup'] }.first['setup'].each do |action|
+              next unless action['do']
               api, arguments = action['do'].to_a.first
               arguments      = Utils.symbolize_keys(arguments)
               Runner.perform_api_call((test.to_s + '___setup'), api, arguments)
@@ -239,8 +326,14 @@ suites.each do |suite|
 
           # --- Register test method ------------------------------------------
           should test_name do
+            if ENV['CI']
+              ref = ENV['TEST_BUILD_REF'].to_s.gsub(/origin\//, '') || 'master'
+              $stderr.puts "https://github.com/elasticsearch/elasticsearch/blob/#{ref}/rest-api-spec/test/" \
+                          + file.gsub(PATH.to_s, ''), ""
+              $stderr.puts YAML.dump(test)
+            end
             actions.each do |action|
-              STDERR.puts "ACTION: #{action.inspect}" if ENV['DEBUG']
+              $stderr.puts "ACTION: #{action.inspect}" if ENV['DEBUG']
 
               case
 
@@ -255,7 +348,7 @@ suites.each do |suite|
                     $results[test.hash] = Runner.perform_api_call(test, api, arguments)
                   rescue Exception => e
                     if catch_exception
-                      STDERR.puts "CATCH '#{catch_exception}': #{e.inspect}" if ENV['DEBUG']
+                      $stderr.puts "CATCH '#{catch_exception}': #{e.inspect}" if ENV['DEBUG']
                       case e
                         when 'missing'
                           assert_match /\[404\]/, e.message
@@ -277,28 +370,44 @@ suites.each do |suite|
                 #
                 when property = action['is_true']
                   result = Runner.evaluate(test, property)
-                  STDERR.puts "CHECK: Expected '#{property}' to be true, is: #{result.inspect}" if ENV['DEBUG']
+                  $stderr.puts "CHECK: Expected '#{property}' to be true, is: #{result.inspect}" if ENV['DEBUG']
                   assert(result, "Property '#{property}' should be true, is: #{result.inspect}")
 
                 when property = action['is_false']
                   result = Runner.evaluate(test, property)
-                  STDERR.puts "CHECK: Expected '#{property}' to be false, is: #{result.inspect}" if ENV['DEBUG']
+                  $stderr.puts "CHECK: Expected '#{property}' to be false, is: #{result.inspect}" if ENV['DEBUG']
                   assert( !!! result, "Property '#{property}' should be false, is: #{result.inspect}")
 
                 when a = action['match']
                   property, value = a.to_a.first
 
-                  value  = Runner.fetch_or_return(value)
-                  result = Runner.evaluate(test, property)
-                  STDERR.puts "CHECK: Expected '#{property}' to be '#{value}', is: #{result.inspect}" if ENV['DEBUG']
-                  assert_equal(value, result)
+                  if value.is_a?(String) && value =~ %r{\s*^/\s*.*\s*/$\s*}mx # Begins and ends with /
+                    pattern = Regexp.new(value.strip[1..-2], Regexp::EXTENDED|Regexp::MULTILINE)
+                  else
+                    value  = Runner.fetch_or_return(value)
+                  end
+
+                  if property == '$body'
+                    result = $results[test.hash]
+                  else
+                    result = Runner.evaluate(test, property)
+                  end
+
+                  if pattern
+                    $stderr.puts "CHECK: Expected '#{property}' to match #{pattern}, is: #{result.inspect}" if ENV['DEBUG']
+                    assert_match(pattern, result)
+                  else
+                    value = value.reduce({}) { |memo, (k,v)| memo[k] =  Runner.fetch_or_return(v); memo  } if value.is_a? Hash
+                    $stderr.puts "CHECK: Expected '#{property}' to be '#{value}', is: #{result.inspect}" if ENV['DEBUG']
+                    assert_equal(value, result)
+                  end
 
                 when a = action['length']
                   property, value = a.to_a.first
 
                   result = Runner.evaluate(test, property)
                   length = result.size
-                  STDERR.puts "CHECK: Expected '#{property}' to be #{value}, is: #{length.inspect}" if ENV['DEBUG']
+                  $stderr.puts "CHECK: Expected '#{property}' to be #{value}, is: #{length.inspect}" if ENV['DEBUG']
                   assert_equal(value, length)
 
                 when a = action['lt'] || action['gt']
@@ -309,14 +418,14 @@ suites.each do |suite|
                   result  = Runner.evaluate(test, property)
                   message = "Expected '#{property}' to be #{operator} #{value}, is: #{result.inspect}"
 
-                  STDERR.puts "CHECK: #{message}" if ENV['DEBUG']
+                  $stderr.puts "CHECK: #{message}" if ENV['DEBUG']
                   # operator == 'less than' ? assert(value.to_f < result.to_f, message) : assert(value.to_f > result.to_f, message)
                   assert_operator result, operator.to_sym, value.to_i
 
                 when stash = action['set']
                   property, variable = stash.to_a.first
                   result  = Runner.evaluate(test, property)
-                  STDERR.puts "STASH: '$#{variable}' => #{result.inspect}" if ENV['DEBUG']
+                  $stderr.puts "STASH: '$#{variable}' => #{result.inspect}" if ENV['DEBUG']
                   Runner.set variable, result
               end
             end

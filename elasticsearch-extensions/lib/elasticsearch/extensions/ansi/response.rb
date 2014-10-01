@@ -13,7 +13,7 @@ module Elasticsearch
         # representation of the Elasticsearch response for:
         #
         # * Search results (hits and highlights)
-        # * Facets (terms, statistical, date_histogram)
+        # * Facets (terms, statistical, histogram, date_histogram)
         # * Analyze API output
         # * Shard allocation
         #
@@ -31,7 +31,11 @@ module Elasticsearch
             Actions.send(m, self, options)
           end
 
-          output.compact.join("\n")
+          unless output.compact.empty?
+            output.compact.join("\n")
+          else
+            self.respond_to?(:awesome_inspect) ? self.awesome_inspect : self.inspect
+          end
         end
       end
 

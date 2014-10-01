@@ -7,12 +7,6 @@ module Elasticsearch
       context "Indices: Get warmer" do
         subject { FakeClient.new }
 
-        should "require the :index argument" do
-          assert_raise ArgumentError do
-            subject.indices.get_warmer :name => 'foo'
-          end
-        end
-
         should "perform correct request" do
           subject.expects(:perform_request).with do |method, url, params, body|
             assert_equal 'GET', method
@@ -32,6 +26,15 @@ module Elasticsearch
           end.returns(FakeResponse.new)
 
           subject.indices.get_warmer :index => 'foo', :name => 'bar'
+        end
+
+        should "URL-escape the parts" do
+          subject.expects(:perform_request).with do |method, url, params, body|
+            assert_equal 'foo%5Ebar/_warmer/bar%2Fbam', url
+            true
+          end.returns(FakeResponse.new)
+
+          subject.indices.get_warmer :index => 'foo^bar', :name => 'bar/bam'
         end
 
       end

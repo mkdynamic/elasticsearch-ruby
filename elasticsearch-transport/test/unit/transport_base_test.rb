@@ -57,6 +57,25 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
       transport = DummyTransport.new :options => { :sniffer_class => DummySniffer }
       assert_instance_of DummySniffer, transport.sniffer
     end
+
+    context "when combining the URL" do
+      setup do
+        @transport   = DummyTransport.new
+        @basic_parts = { :protocol => 'http', :host => 'myhost', :port => 8080 }
+      end
+
+      should "combine basic parts" do
+        assert_equal 'http://myhost:8080', @transport.__full_url(@basic_parts)
+      end
+
+      should "combine path" do
+        assert_equal 'http://myhost:8080/api', @transport.__full_url(@basic_parts.merge :path => '/api')
+      end
+
+      should "combine authentication credentials" do
+        assert_equal 'http://U:P@myhost:8080', @transport.__full_url(@basic_parts.merge :user => 'U', :password => 'P')
+      end
+    end
   end
 
   context "getting a connection" do
@@ -123,7 +142,7 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
       @transport.serializer.expects(:load).returns({'foo' => 'bar'})
 
       response = @transport.perform_request 'GET', '/' do
-                   Elasticsearch::Transport::Transport::Response.new 200, '{"foo":"bar"}'
+                   Elasticsearch::Transport::Transport::Response.new 200, '{"foo":"bar"}', {"content-type" => 'application/json'}
                  end
 
       assert_instance_of Elasticsearch::Transport::Transport::Response, response
@@ -134,7 +153,7 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
       @transport.expects(:get_connection).returns(stub_everything :failures => 1)
       @transport.serializer.expects(:load).never
       response = @transport.perform_request 'GET', '/' do
-                   Elasticsearch::Transport::Transport::Response.new 200, 'FOOBAR'
+                   Elasticsearch::Transport::Transport::Response.new 200, 'FOOBAR', {"content-type" => 'text/plain'}
                  end
 
       assert_instance_of Elasticsearch::Transport::Transport::Response, response
@@ -158,6 +177,15 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
       assert_raise Elasticsearch::Transport::Transport::Errors::NotFound do
         @transport.perform_request 'GET', '/' do
           Elasticsearch::Transport::Transport::Response.new 404, 'NOT FOUND'
+        end
+      end
+    end
+
+    should "raise an error for HTTP status 404 with application/json content type" do
+      @transport.expects(:get_connection).returns(stub_everything :failures => 1)
+      assert_raise Elasticsearch::Transport::Transport::Errors::NotFound do
+        @transport.perform_request 'GET', '/' do
+          Elasticsearch::Transport::Transport::Response.new 404, 'NOT FOUND', {"content-type" => 'application/json'}
         end
       end
     end
@@ -223,24 +251,26 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
       @block = Proc.new { |c, u| puts "UNREACHABLE" }
     end
 
-    should "retry DEFAULT_MAX_TRIES when host is unreachable" do
-      @block.expects(:call).times(3).
+    should "retry DEFAULT_MAX_RETRIES when host is unreachable" do
+      @block.expects(:call).times(4).
             raises(Errno::ECONNREFUSED).
+            then.raises(Errno::ECONNREFUSED).
             then.raises(Errno::ECONNREFUSED).
             then.returns(stub_everything :failures => 1)
 
       assert_nothing_raised do
         @transport.perform_request('GET', '/', &@block)
-        assert_equal 3, @transport.counter
+        assert_equal 4, @transport.counter
       end
     end
 
     should "raise an error after max tries" do
-      @block.expects(:call).times(3).
+      @block.expects(:call).times(4).
             raises(Errno::ECONNREFUSED).
             then.raises(Errno::ECONNREFUSED).
             then.raises(Errno::ECONNREFUSED).
-            then.raises(Errno::ECONNREFUSED)
+            then.raises(Errno::ECONNREFUSED).
+            then.returns(stub_everything :failures => 1)
 
       assert_raise Errno::ECONNREFUSED do
         @transport.perform_request('GET', '/', &@block)
@@ -251,10 +281,14 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
   context "logging" do
     setup do
       @transport = DummyTransportPerformer.new :options => { :logger => Logger.new('/dev/null') }
-      @transport.stubs(:get_connection).returns  stub :full_url => 'localhost:9200/_search?size=1',
-                                                      :host     => 'localhost',
-                                                      :failures  => 0,
-                                                      :healthy! => true
+
+      fake_connection = stub :full_url => 'localhost:9200/_search?size=1',
+                             :host     => 'localhost',
+                             :connection => stub_everything,
+                             :failures => 0,
+                             :healthy! => true
+
+      @transport.stubs(:get_connection).returns(fake_connection)
       @transport.serializer.stubs(:load).returns 'foo' => 'bar'
       @transport.serializer.stubs(:dump).returns '{"foo":"bar"}'
     end
@@ -271,10 +305,11 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
                  end
     end
 
-    should "log failed request" do
+    should "log a failed Elasticsearch request" do
       @block = Proc.new { |c, u| puts "ERROR" }
       @block.expects(:call).returns(Elasticsearch::Transport::Transport::Response.new 500, 'ERROR')
 
+      @transport.expects(:__log)
       @transport.logger.expects(:fatal)
 
       assert_raise Elasticsearch::Transport::Transport::Errors::InternalServerError do
@@ -282,10 +317,11 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
       end
     end unless RUBY_1_8
 
-    should "log and re-raise exception" do
+    should "log and re-raise a Ruby exception" do
       @block = Proc.new { |c, u| puts "ERROR" }
       @block.expects(:call).raises(Exception)
 
+      @transport.expects(:__log).never
       @transport.logger.expects(:fatal)
 
       assert_raise(Exception) { @transport.perform_request('POST', '_search', &@block) }
@@ -295,10 +331,14 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
   context "tracing" do
     setup do
       @transport = DummyTransportPerformer.new :options => { :tracer => Logger.new('/dev/null') }
-      @transport.stubs(:get_connection).returns  stub :full_url => 'localhost:9200/_search?size=1',
-                                                     :host      => 'localhost',
-                                                     :failures  => 0,
-                                                     :healthy!  => true
+
+      fake_connection = stub :full_url => 'localhost:9200/_search?size=1',
+                             :host     => 'localhost',
+                             :connection => stub_everything,
+                             :failures => 0,
+                             :healthy! => true
+
+      @transport.stubs(:get_connection).returns(fake_connection)
       @transport.serializer.stubs(:load).returns 'foo' => 'bar'
       @transport.serializer.stubs(:dump).returns <<-JSON.gsub(/^      /, '')
       {
@@ -329,6 +369,17 @@ class Elasticsearch::Transport::Transport::BaseTest < Test::Unit::TestCase
                    Elasticsearch::Transport::Transport::Response.new 200, '{"foo":"bar"}'
                  end
     end
+
+    should "trace a failed Elasticsearch request" do
+      @block = Proc.new { |c, u| puts "ERROR" }
+      @block.expects(:call).returns(Elasticsearch::Transport::Transport::Response.new 500, 'ERROR')
+
+      @transport.expects(:__trace)
+
+      assert_raise Elasticsearch::Transport::Transport::Errors::InternalServerError do
+        @transport.perform_request('POST', '_search', &@block)
+      end
+    end unless RUBY_1_8
 
   end
 

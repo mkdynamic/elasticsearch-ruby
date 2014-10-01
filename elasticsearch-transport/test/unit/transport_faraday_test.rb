@@ -17,12 +17,18 @@ class Elasticsearch::Transport::Transport::HTTP::FaradayTest < Test::Unit::TestC
       assert_equal 1, @transport.connections.size
 
       assert_instance_of ::Faraday::Connection, @transport.connections.first.connection
-      assert_equal 'http://foobar:1234/', @transport.connections.first.connection.url_prefix.to_s
+      assert_equal 'http://foobar:1234/',       @transport.connections.first.connection.url_prefix.to_s
     end
 
     should "perform the request" do
       @transport.connections.first.connection.expects(:run_request).returns(stub_everything)
       @transport.perform_request 'GET', '/'
+    end
+
+    should "return a Response" do
+      @transport.connections.first.connection.expects(:run_request).returns(stub_everything)
+      response = @transport.perform_request 'GET', '/'
+      assert_instance_of Elasticsearch::Transport::Transport::Response, response
     end
 
     should "properly prepare the request" do
@@ -58,15 +64,76 @@ class Elasticsearch::Transport::Transport::HTTP::FaradayTest < Test::Unit::TestC
                          @transport.connections.selector
     end
 
-    should "allow to set options for Faraday" do
+    should "pass a configuration block to the Faraday constructor" do
       config_block = lambda do |f|
         f.response :logger
+        f.path_prefix = '/moo'
       end
 
       transport = Faraday.new :hosts => [ { :host => 'foobar', :port => 1234 } ], &config_block
 
-      handlers = transport.connections.first.connection.instance_variable_get(:@builder).instance_variable_get(:@handlers)
-      assert handlers.include?(::Faraday::Response::Logger), "#{handlers.inspect} does not include <::Faraday::Adapter::Typhoeus>"
+      handlers = transport.connections.first.connection.builder.handlers
+
+      assert_equal 1, handlers.size
+      assert handlers.include?(::Faraday::Response::Logger), "#{handlers.inspect} does not include <::Faraday::Adapter::Logger>"
+
+      assert_equal '/moo',                   transport.connections.first.connection.path_prefix
+      assert_equal 'http://foobar:1234/moo', transport.connections.first.connection.url_prefix.to_s
+    end
+
+    should "pass transport_options to the Faraday constructor" do
+      transport = Faraday.new :hosts => [ { :host => 'foobar', :port => 1234 } ],
+                              :options => { :transport_options => {
+                                              :request => { :open_timeout => 1 },
+                                              :headers => { :foo_bar => 'bar'  },
+                                              :ssl     => { :verify => false }
+                                            }
+                                          }
+
+      assert_equal 1,     transport.connections.first.connection.options.open_timeout
+      assert_equal 'bar', transport.connections.first.connection.headers['Foo-Bar']
+      assert_equal false, transport.connections.first.connection.ssl.verify?
+    end
+
+    should "merge in parameters defined in the Faraday connection parameters" do
+      transport = Faraday.new :hosts => [ { :host => 'foobar', :port => 1234 } ],
+                              :options => { :transport_options => {
+                                              :params => { :format => 'yaml' }
+                                            }
+                                          }
+      # transport.logger = Logger.new(STDERR)
+
+      transport.connections.first.connection.expects(:run_request).
+        with do |method, url, params, body|
+          assert_match /\?format=yaml/, url
+          true
+        end.
+        returns(stub_everything)
+
+      transport.perform_request 'GET', ''
+    end
+
+    should "not overwrite request parameters with the Faraday connection parameters" do
+      transport = Faraday.new :hosts => [ { :host => 'foobar', :port => 1234 } ],
+                              :options => { :transport_options => {
+                                              :params => { :format => 'yaml' }
+                                            }
+                                          }
+      # transport.logger = Logger.new(STDERR)
+
+      transport.connections.first.connection.expects(:run_request).
+        with do |method, url, params, body|
+          assert_match /\?format=json/, url
+          true
+        end.
+        returns(stub_everything)
+
+      transport.perform_request 'GET', '', { :format => 'json' }
+    end
+
+    should "set the credentials if passed" do
+      transport = Faraday.new :hosts => [ { :host => 'foobar', :port => 1234, :user => 'foo', :password => 'bar' } ]
+      assert_equal 'Basic Zm9vOmJhcg==', transport.connections.first.connection.headers['Authorization']
     end
   end
 

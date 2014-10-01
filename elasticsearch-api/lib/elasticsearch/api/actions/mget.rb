@@ -36,23 +36,33 @@ module Elasticsearch
       # @option arguments [Boolean] :realtime Specify whether to perform the operation in realtime or search mode
       # @option arguments [Boolean] :refresh Refresh the shard containing the document before performing the operation
       # @option arguments [String] :routing Specific routing value
+      # @option arguments [String] :_source Specify whether the _source field should be returned,
+      #                                     or a list of fields to return
+      # @option arguments [String] :_source_exclude A list of fields to exclude from the returned _source field
+      # @option arguments [String] :_source_include A list of fields to extract and return from the _source field
       #
       # @see http://elasticsearch.org/guide/reference/api/multi-get/
       #
       def mget(arguments={})
         raise ArgumentError, "Required argument 'body' missing" unless arguments[:body]
+
+        valid_params = [
+          :fields,
+          :parent,
+          :preference,
+          :realtime,
+          :refresh,
+          :routing,
+          :_source,
+          :_source_include,
+          :_source_exclude ]
+
         method = 'GET'
-        path   = Utils.__pathify( arguments[:index], arguments[:type], '_mget' )
-        params = arguments.select do |k,v|
-          [ :fields,
-            :parent,
-            :preference,
-            :realtime,
-            :refresh,
-            :routing ].include?(k)
-        end
-        # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-        params = Hash[params] unless params.is_a?(Hash)
+        path   = Utils.__pathify Utils.__escape(arguments[:index]),
+                                 Utils.__escape(arguments[:type]),
+                                 '_mget'
+
+        params = Utils.__validate_and_extract_params arguments, valid_params
         body   = arguments[:body]
 
         params[:fields] = Utils.__listify(params[:fields]) if params[:fields]

@@ -21,8 +21,8 @@ module Elasticsearch
       #       body: [
       #         { query: { match_all: {} } },
       #         { index: 'myindex', type: 'mytype' },
-      #         { query: { query_string: { query: '"Test 1"' } } }
-      #         { search_type: 'count' }
+      #         { query: { query_string: { query: '"Test 1"' } } },
+      #         { search_type: 'count' },
       #         { facets: { published: { terms: { field: 'published' } } } }
       #       ]
       #
@@ -37,13 +37,12 @@ module Elasticsearch
       #
       def msearch(arguments={})
         raise ArgumentError, "Required argument 'body' missing" unless arguments[:body]
+        valid_params = [ :search_type ]
+
         method = 'GET'
         path   = Utils.__pathify( Utils.__listify(arguments[:index]), Utils.__listify(arguments[:type]), '_msearch' )
-        params = arguments.select do |k,v|
-          [ :search_type ].include?(k)
-        end
-        # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-        params = Hash[params] unless params.is_a?(Hash)
+
+        params = Utils.__validate_and_extract_params arguments, valid_params
         body   = arguments[:body]
 
         case

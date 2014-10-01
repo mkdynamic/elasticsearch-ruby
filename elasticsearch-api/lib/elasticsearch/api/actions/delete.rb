@@ -24,7 +24,7 @@ module Elasticsearch
       # @option arguments [String] :routing Specific routing value
       # @option arguments [Time] :timeout Explicit operation timeout
       # @option arguments [Number] :version Explicit version number for concurrency control
-      # @option arguments [String] :version_type Specific version type (options: internal, external)
+      # @option arguments [String] :version_type Specific version type (options: internal, external, external_gte, force)
       #
       # @see http://elasticsearch.org/guide/reference/api/delete/
       #
@@ -32,27 +32,30 @@ module Elasticsearch
         raise ArgumentError, "Required argument 'index' missing" unless arguments[:index]
         raise ArgumentError, "Required argument 'type' missing"  unless arguments[:type]
         raise ArgumentError, "Required argument 'id' missing"    unless arguments[:id]
+
+        valid_params = [
+          :consistency,
+          :parent,
+          :refresh,
+          :replication,
+          :routing,
+          :timeout,
+          :version,
+          :version_type ]
+
         method = 'DELETE'
-        path   = Utils.__pathify( arguments[:index], arguments[:type], arguments[:id] )
-        params = arguments.select do |k,v|
-          [ :consistency,
-            :parent,
-            :refresh,
-            :replication,
-            :routing,
-            :timeout,
-            :version,
-            :version_type ].include?(k)
-        end
-        # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-        params = Hash[params] unless params.is_a?(Hash)
+        path   = Utils.__pathify Utils.__escape(arguments[:index]),
+                                 Utils.__escape(arguments[:type]),
+                                 Utils.__escape(arguments[:id])
+
+        params = Utils.__validate_and_extract_params arguments, valid_params
         body   = nil
 
         perform_request(method, path, params, body).body
 
       rescue Exception => e
         # NOTE: Use exception name, not full class in Elasticsearch::Client to allow client plugability
-        if arguments[:ignore] == 404 && e.class.to_s =~ /NotFound/; false
+        if Array(arguments[:ignore]).include?(404) && e.class.to_s =~ /NotFound/; false
         else raise(e)
         end
       end

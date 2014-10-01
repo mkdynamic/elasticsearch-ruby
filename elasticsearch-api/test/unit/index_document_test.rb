@@ -41,6 +41,21 @@ module Elasticsearch
 
           subject.index :index => 'foo', :type => 'bar', :id => '123', :body => {:foo => 'bar'}
         end
+
+        should "URL-escape the parts" do
+          subject.expects(:perform_request).with do |method, url, params, body|
+            assert_equal 'foo/bar%2Fbam/123', url
+            true
+          end.returns(FakeResponse.new)
+
+          subject.index :index => 'foo', :type => 'bar/bam', :id => '123', :body => {}
+        end
+
+        should "validate URL parameters" do
+          assert_raise ArgumentError do
+            subject.index :index => 'foo', :type => 'bar/bam', :id => '123', :body => {}, :qwertypoiuy => 'asdflkjhg'
+          end
+        end
       end
 
       context "Creating a document" do

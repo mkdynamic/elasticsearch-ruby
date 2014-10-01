@@ -22,6 +22,15 @@ module Elasticsearch
       #                     facets: { tags: { terms: { field: 'tags' } } }
       #                   }
       #
+      # @example Paginating results: return 10 documents, beginning from the 10th
+      #
+      #     client.search index: 'myindex',
+      #                   body: {
+      #                     query: { match: { title: 'test' } },
+      #                     from: 10,
+      #                     size: 10
+      #                   }
+      #
       # @example Passing the search definition as a `String`, built with a JSON builder
       #
       #     require 'jbuilder'
@@ -70,7 +79,6 @@ module Elasticsearch
       # @option arguments [Number] :from Starting offset (default: 0)
       # @option arguments [String] :ignore_indices When performed on multiple indices, allows to ignore `missing` ones
       #                                            (options: none, missing)
-      # @option arguments [List] :indices_boost Comma-separated list of index boosts
       # @option arguments [Boolean] :lenient Specify whether format-based query failures
       #                                      (such as providing text to a numeric field) should be ignored
       # @option arguments [Boolean] :lowercase_expanded_terms Specify whether query terms should be lowercased
@@ -86,6 +94,10 @@ module Elasticsearch
       # @option arguments [List] :sort A comma-separated list of <field>:<direction> pairs
       # @option arguments [String] :source The URL-encoded request definition using the Query DSL
       #                                    (instead of using request body)
+      # @option arguments [String] :_source Specify whether the _source field should be returned,
+      #                                     or a list of fields to return
+      # @option arguments [String] :_source_exclude A list of fields to exclude from the returned _source field
+      # @option arguments [String] :_source_include A list of fields to extract and return from the _source field
       # @option arguments [List] :stats Specific 'tag' of the request for logging and statistical purposes
       # @option arguments [String] :suggest_field Specify which field to use for suggestions
       # @option arguments [String] :suggest_mode Specify suggest mode (options: missing, popular, always)
@@ -102,38 +114,43 @@ module Elasticsearch
       def search(arguments={})
         arguments[:index] = '_all' if ! arguments[:index] && arguments[:type]
 
+        valid_params = [
+          :analyzer,
+          :analyze_wildcard,
+          :default_operator,
+          :df,
+          :explain,
+          :fields,
+          :from,
+          :ignore_indices,
+          :ignore_unavailable,
+          :allow_no_indices,
+          :expand_wildcards,
+          :lenient,
+          :lowercase_expanded_terms,
+          :preference,
+          :q,
+          :routing,
+          :scroll,
+          :search_type,
+          :size,
+          :sort,
+          :source,
+          :_source,
+          :_source_include,
+          :_source_exclude,
+          :stats,
+          :suggest_field,
+          :suggest_mode,
+          :suggest_size,
+          :suggest_text,
+          :timeout,
+          :version ]
+
         method = 'GET'
         path   = Utils.__pathify( Utils.__listify(arguments[:index]), Utils.__listify(arguments[:type]), '_search' )
-        params = arguments.select do |k,v|
-          [ :analyzer,
-            :analyze_wildcard,
-            :default_operator,
-            :df,
-            :explain,
-            :fields,
-            :from,
-            :ignore_indices,
-            :indices_boost,
-            :lenient,
-            :lowercase_expanded_terms,
-            :preference,
-            :q,
-            :routing,
-            :scroll,
-            :search_type,
-            :size,
-            :sort,
-            :source,
-            :stats,
-            :suggest_field,
-            :suggest_mode,
-            :suggest_size,
-            :suggest_text,
-            :timeout,
-            :version ].include?(k)
-        end
-        # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-        params = Hash[params] unless params.is_a?(Hash)
+
+        params = Utils.__validate_and_extract_params arguments, valid_params
         body   = arguments[:body]
 
         params[:fields] = Utils.__listify(params[:fields]) if params[:fields]

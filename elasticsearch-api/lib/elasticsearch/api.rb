@@ -1,3 +1,4 @@
+require "cgi"
 require "multi_json"
 
 require "elasticsearch/api/version"
@@ -9,6 +10,20 @@ Dir[ File.expand_path('../api/namespace/**/*.rb', __FILE__) ].each { |f| require
 
 module Elasticsearch
   module API
+    COMMON_PARAMS = [
+      :ignore,                        # Client specific parameters
+      :index, :type, :id,             # :index/:type/:id
+      :body,                          # Request body
+      :node_id,                       # Cluster
+      :name,                          # Alias, template, settings, warmer, ...
+      :field                          # Get field mapping
+    ]
+
+    COMMON_QUERY_PARAMS = [
+      :format,                        # Search, Cat, ...
+      :pretty,                        # Pretty-print the response
+      :human                          # Return numeric values in human readable format
+    ]
 
     # Auto-include all namespaces in the receiver
     #
@@ -17,7 +32,10 @@ module Elasticsearch
                 Elasticsearch::API::Common,
                 Elasticsearch::API::Actions,
                 Elasticsearch::API::Cluster,
-                Elasticsearch::API::Indices
+                Elasticsearch::API::Nodes,
+                Elasticsearch::API::Indices,
+                Elasticsearch::API::Snapshot,
+                Elasticsearch::API::Cat
     end
   end
 end

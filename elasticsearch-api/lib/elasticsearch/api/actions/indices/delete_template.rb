@@ -9,6 +9,10 @@ module Elasticsearch
         #
         #     client.indices.delete_template name: 'mytemplate'
         #
+        # @example Delete all templates
+        #
+        #     client.indices.delete_template name: '*'
+        #
         # @option arguments [String] :name The name of the template (*Required*)
         # @option arguments [Time] :timeout Explicit operation timeout
         #
@@ -16,16 +20,21 @@ module Elasticsearch
         #
         def delete_template(arguments={})
           raise ArgumentError, "Required argument 'name' missing" unless arguments[:name]
+          valid_params = [ :timeout ]
+
           method = 'DELETE'
-          path   = "_template/#{arguments[:name]}"
-          params = arguments.select do |k,v|
-            [ :timeout ].include?(k)
-          end
-          # Normalize Ruby 1.8 and Ruby 1.9 Hash#select behaviour
-          params = Hash[params] unless params.is_a?(Hash)
+          path   = Utils.__pathify '_template', Utils.__escape(arguments[:name])
+
+          params = Utils.__validate_and_extract_params arguments, valid_params
           body = nil
 
           perform_request(method, path, params, body).body
+
+        rescue Exception => e
+          # NOTE: Use exception name, not full class in Elasticsearch::Client to allow client plugability
+          if Array(arguments[:ignore]).include?(404) && e.class.to_s =~ /NotFound/; false
+          else raise(e)
+          end
         end
       end
     end
